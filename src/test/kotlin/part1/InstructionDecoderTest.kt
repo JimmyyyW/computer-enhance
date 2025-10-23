@@ -6,43 +6,67 @@ import kotlin.test.Test
 
 class InstructionDecoderTest {
 
+    /**
+     * basic test harness.
+     *
+     * given a binary file, decode it to assembly instructions and then recompile to binary
+     * to ensure it matches the original binary.
+     */
     @Test
     fun `should match the original assembly`() {
-        val file = File("src/test/resources/instructions/simple-reg-to-reg")
-        val expectedInstructionsFileLines =  getInstructionsFromFile("src/test/resources/instructions/simple-reg-to-reg.asm")
-
-        val decodedInstructions = decodeInstructions(file.path)
-
-        val result = decodedInstructions.lines()
-
-        assert(result.containsAll(expectedInstructionsFileLines)) {
-            "Decoded instructions do not match expected instructions.\n" +
-                    "Expected: $expectedInstructionsFileLines\n" +
-                    "Got: $result"
-        }
+        forFile("simple-reg-to-reg", ::binaryMatchesExpected)
     }
 
     @Test
     fun `should match the original assembly with mixed instructions`() {
-        val file = File("src/test/resources/instructions/many-move")
-        val expectedInstructionsFileLines =  getInstructionsFromFile("src/test/resources/instructions/many-move.asm")
-
-        val decodedInstructions = decodeInstructions(file.path)
-
-        val result = decodedInstructions.lines()
-
-        assert(result.containsAll(expectedInstructionsFileLines)) {
-            "Decoded instructions do not match expected instructions.\n" +
-                    "Expected: $expectedInstructionsFileLines\n" +
-                    "Got: $result"
-        }
+        forFile("many-move", ::binaryMatchesExpected)
     }
 
-    private fun getInstructionsFromFile(fileName: String): List<String> {
-        val file = File(fileName)
-        return file.readLines().map { it.trim() }
-            .filter { !it.contains("bits") }
-            .filter { it.isNotEmpty() }
+    @Test
+    fun `should match the original assembly with immediate instructions`() {
+        forFile("simple-immediate-to-reg", ::binaryMatchesExpected)
+    }
+
+//    @Test
+//    fun `should match the original assembly with a variety of instructions`() {
+//        forFile("listing_39_more_movs", ::binaryMatchesExpected)
+//    }
+
+    private fun binaryMatchesExpected(
+        binaryFile: File,
+    ): Boolean {
+        val outputBinary = File.createTempFile("output", ".bin")
+
+        // the function under test
+        outputBinary.writeText(decodeInstructions(binaryFile))
+
+        val processNasm = ProcessBuilder(
+            "nasm",
+            "-f",
+            "bin",
+            binaryFile.absolutePath,
+            "-o",
+            outputBinary.absolutePath
+        ).start()
+
+        if (processNasm.waitFor() == 0) {
+            val originalBytes = binaryFile.readBytes()
+            val outputBytes = outputBinary.readBytes()
+            return originalBytes.contentEquals(outputBytes)
+        } else {
+            val errorStream = processNasm.errorStream.bufferedReader().readText()
+            throw RuntimeException("NASM failed: $errorStream")
+        }
+
+    }
+
+    private fun forFile(fileName: String, block: (File) -> Unit) {
+        val binaryFile = File("$BASE_DIR/$fileName")
+        block(binaryFile)
+    }
+
+    companion object {
+        private const val BASE_DIR: String = "src/test/resources/instructions"
     }
 
 }

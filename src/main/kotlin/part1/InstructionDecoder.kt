@@ -14,17 +14,19 @@ import java.nio.ByteOrder
 // D = flips REG & RM
 // W = is this 16bit or 8bit (wide)
 
-fun decodeInstructions(binaryFile: String): String {
-    val file = File(binaryFile)
-    val bytes = file.readBytes()
+fun decodeInstructions(binaryFile: File): String {
+    val bytes = binaryFile.readBytes()
     val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
 
     val sb = StringBuilder()
+    var instructionIdx = 0
 
     while (buffer.hasRemaining()) {
+        println("taking instruction $instructionIdx at position ${buffer.position()}")
         val instruction = getInstruction(buffer)
         sb.append(instruction.asmString)
         sb.append("\n")
+        instructionIdx++
     }
 
     val toString = sb.toString()
@@ -41,9 +43,31 @@ private fun getInstruction(buffer: ByteBuffer): Instruction {
             val modrmByte = buffer.get()
             val reg = ((modrmByte.toInt() shr 3) and 0b111).toByte()
             val rm = (modrmByte.toInt() and 0b111).toByte()
-            Instruction.Mov(getRegister(reg, w == 1)!!, getRegister(rm, w == 1)!!)
+            Instruction.Mov(
+                getRegister(reg, w.isOne())!!,
+                getRegister(rm, w.isOne())!!
+            )
         }
-        else -> throw IllegalArgumentException("Unknown instruction")
+
+        // MOV immediate to register
+        opcode and 0b11110000 == 0b10110000 -> {
+            val w = (opcode shr 3) and 0x1
+            val reg = (opcode and 0b000000111).toByte()
+            val w1 = w.isOne()
+            val value = if (w1) {
+                buffer.get().toInt() and 0xFF + buffer.get().toInt() and 0xFF
+            } else {
+                buffer.get().toInt() and 0xFF
+            }
+            val regName = getRegister(reg, w1)!!
+
+            Instruction.Immediate(regName, value and 0xFF)
+        }
+
+        else -> {
+            println("opcode: $opcode (${opcode.toString(2).padStart(8, '0')})")
+            throw IllegalArgumentException("Unknown instruction")
+        }
     }
 }
 
@@ -57,9 +81,14 @@ sealed interface Instruction {
     val asmString: String
         get() = when (this) {
             is Mov -> "$mnemonic $to, $from"
+            is Immediate -> "$mnemonic $to, $value"
         }
 
     data class Mov(val from: String, val to: String) : Instruction {
+        override val mnemonic: String = "mov"
+    }
+
+    data class Immediate(val to: String, val value: Int) : Instruction {
         override val mnemonic: String = "mov"
     }
 
@@ -86,3 +115,5 @@ private val highRegister = mapOf(
     0b110.toByte() to "si",
     0b111.toByte() to "di",
 )
+
+private fun Int.isOne() : Boolean = this == 1
