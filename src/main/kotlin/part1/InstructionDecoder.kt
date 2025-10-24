@@ -19,19 +19,24 @@ fun decodeInstructions(binaryFile: File): String {
     val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
 
     val sb = StringBuilder()
+    sb.append("bits 16\n\n")
     var instructionIdx = 0
 
-    while (buffer.hasRemaining()) {
-        println("taking instruction $instructionIdx at position ${buffer.position()}")
-        val instruction = getInstruction(buffer)
-        sb.append(instruction.asmString)
-        sb.append("\n")
-        instructionIdx++
-    }
+    runCatching {
+        while (buffer.hasRemaining()) {
+            val instruction = getInstruction(buffer)
+            sb.append(instruction.asmString)
+            sb.append("\n")
+            instructionIdx++
+        }
 
-    val toString = sb.toString()
-    println(toString)
-    return toString
+        sb.toString()
+    }.fold(
+        onSuccess = { return it },
+        onFailure = {
+            throw IllegalArgumentException("Failed to decode instructions at instruction index $instructionIdx", it)
+        }
+    )
 }
 
 private fun getInstruction(buffer: ByteBuffer): Instruction {
@@ -39,14 +44,23 @@ private fun getInstruction(buffer: ByteBuffer): Instruction {
     return when {
         // MOV - bit mask last 2 bits
         opcode and 0b11111100 == 0b10001000 -> {
+            val d = (opcode shr 1) and 0b1
             val w = opcode and 0b1
             val modrmByte = buffer.get()
             val reg = ((modrmByte.toInt() shr 3) and 0b111).toByte()
             val rm = (modrmByte.toInt() and 0b111).toByte()
-            Instruction.Mov(
-                getRegister(reg, w.isOne())!!,
-                getRegister(rm, w.isOne())!!
-            )
+            val (rmOperand, _) = decodeRmOperand(buffer, (modrmByte.toInt() shr 6) and 0b11, rm.toInt(), w.isOne())
+            if (d.isOne()) {
+                Instruction.Mov(
+                    rmOperand,
+                    getRegister(reg, w.isOne())!!
+                )
+            } else {
+                Instruction.Mov(
+                    getRegister(reg, w.isOne())!!,
+                    rmOperand
+                )
+            }
         }
 
         // MOV immediate to register
@@ -55,13 +69,15 @@ private fun getInstruction(buffer: ByteBuffer): Instruction {
             val reg = (opcode and 0b000000111).toByte()
             val w1 = w.isOne()
             val value = if (w1) {
-                buffer.get().toInt() and 0xFF + buffer.get().toInt() and 0xFF
+                val low = buffer.get().toInt() and 0xFF
+                val high = buffer.get().toInt() and 0xFF
+                (high shl 8) or low
             } else {
                 buffer.get().toInt() and 0xFF
             }
             val regName = getRegister(reg, w1)!!
 
-            Instruction.Immediate(regName, value and 0xFF)
+            Instruction.Immediate(regName, value and if (w1) 0xFFFF else 0xFF)
         }
 
         else -> {
@@ -71,17 +87,13 @@ private fun getInstruction(buffer: ByteBuffer): Instruction {
     }
 }
 
-private fun getRegister(byte: Byte, w: Boolean): String? {
-    return if (w) highRegister[byte] else lowRegister[byte]
-}
-
 
 sealed interface Instruction {
     val mnemonic: String
     val asmString: String
         get() = when (this) {
             is Mov -> "$mnemonic $to, $from"
-            is Immediate -> "$mnemonic $to, $value"
+            is Immediate -> "$mnemonic $to, ${formatImmediate(to, value)}"
         }
 
     data class Mov(val from: String, val to: String) : Instruction {
@@ -90,30 +102,50 @@ sealed interface Instruction {
 
     data class Immediate(val to: String, val value: Int) : Instruction {
         override val mnemonic: String = "mov"
+
+        fun formatImmediate(regName: String, value: Int): String {
+            val wordRegs = setOf("ax", "bx", "cx", "dx", "sp", "bp", "si", "di")
+            val v = if (regName.lowercase() in wordRegs) value and 0xFFFF else value and 0xFF
+            return v.toString()
+        }
     }
 
 }
 
-private val lowRegister = mapOf(
-    0b000.toByte() to "al",
-    0b001.toByte() to "cl",
-    0b010.toByte() to "dl",
-    0b011.toByte() to "bl",
-    0b100.toByte() to "ah",
-    0b101.toByte() to "ch",
-    0b110.toByte() to "dh",
-    0b111.toByte() to "bh",
-)
-
-private val highRegister = mapOf(
-    0b000.toByte() to "ax",
-    0b001.toByte() to "cx",
-    0b010.toByte() to "dx",
-    0b011.toByte() to "bx",
-    0b100.toByte() to "sp",
-    0b101.toByte() to "bp",
-    0b110.toByte() to "si",
-    0b111.toByte() to "di",
-)
 
 private fun Int.isOne() : Boolean = this == 1
+
+private fun decodeRmOperand(buffer: ByteBuffer, mod: Int, rm: Int, w: Boolean): Pair<String, Boolean> {
+    return if (mod == 3) {
+        // register-direct
+        val regName = getRegister(rm.toByte(), w)!!
+        regName to false
+    } else {
+        when (mod) {
+            0 -> {
+                if (rm == 6) {
+                    // direct 16-bit address (disp16)
+                    val disp = buffer.toU16LE()
+                    "[$disp]" to true
+                } else {
+                    val base = ea16[rm]
+                    "[$base]" to true
+                }
+            }
+            1 -> {
+                // 8-bit signed displacement
+                val b = buffer.toU8()
+                val s = signExtend8To16(b)
+                val base = ea16[rm]
+                "[$base${formatDispSigned(s)}]" to true
+            }
+            2 -> {
+                // 16-bit displacement (low then high)
+                val disp = buffer.toU16LE()
+                val base = ea16[rm]
+                "[$base${formatDispSigned16(disp)}]" to true
+            }
+            else -> throw IllegalArgumentException("invalid MOD")
+        }
+    }
+}

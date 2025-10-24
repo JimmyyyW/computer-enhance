@@ -12,17 +12,17 @@ mov dx, 3948
 mov dx, -3948
 
 ; source address calculation moves
-;mov al, [bx + si]
-;mov ax, [bp + di]
-;mov dx, [bp]
+mov al, [bx + si]
+mov ax, [bp + di]
+mov dx, [bp]
 
 ; source address calculation plus 8-bit displacement moves
-;mov ah, [bx + si + 4]
+mov ah, [bx + si + 4]
 
 ; source address calculation plus 16-bit displacement moves
-;mov al, [bx + si + 4999]
+mov al, [bx + si + 4999]
 
 ; Dest address calculation moves
-;mov [bx + di], cx
-;mov [bp + si], cl
-;mov [bp], ch
+mov [bx + di], cx
+mov [bp + si], cl
+mov [bp], ch
