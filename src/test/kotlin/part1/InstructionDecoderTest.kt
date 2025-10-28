@@ -35,6 +35,11 @@ class InstructionDecoderTest {
         forFile("listing_39_more_movs", ::binaryMatchesExpected)
     }
 
+    @Test
+    fun `should match the original assembly for simple add instruction`() {
+        forFile("simple-add", ::binaryMatchesExpected)
+    }
+
     private fun binaryMatchesExpected(
         binaryFile: File,
     ) {
